@@ -4,10 +4,18 @@ import dash_bootstrap_components as dbc
 import numpy as np
 import base64
 import io
+import os
 
 from models.earthquake_predictor import predict_damage
 from models.audio_classifier import classify_audio
 
+# Import the SarPy-based analyzer
+from models.sar_analyzer import analyze_sar_file   # <-- Save your code into sarpy_analyzer.py
+
+
+# --------------------------------------------------
+# Dash App Setup
+# --------------------------------------------------
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
 app.layout = dbc.Container([
@@ -20,13 +28,13 @@ app.layout = dbc.Container([
         ])
     ]),
 
-    # Two Frames: SAR and Audio
+    # Three Frames: SAR Earthquake, Audio, and SAR TIFF Analysis
     dbc.Row([
 
-        # SAR frame
+        # SAR Earthquake Detection frame
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader(html.H3("🛰️ SAR Image Analysis")),
+                dbc.CardHeader(html.H3("🛰️ SAR Earthquake Damage")),
                 dbc.CardBody([
                     html.P("Upload Sentinel-1 SAR image (.npy format)"),
                     html.P("4 channels: [pre_VV, pre_VH, post_VV, post_VH]",
@@ -57,7 +65,7 @@ app.layout = dbc.Container([
                     html.Div(id='sar-result', className="mt-3")
                 ])
             ], className="shadow-sm")
-        ], md=6),
+        ], md=4),
 
         # Audio frame
         dbc.Col([
@@ -68,7 +76,6 @@ app.layout = dbc.Container([
                     html.P("Supported formats: .wav, .mp3",
                            className="text-muted small"),
 
-                    # Audio Upload
                     dcc.Upload(
                         id='upload-audio',
                         children=html.Div([
@@ -89,26 +96,87 @@ app.layout = dbc.Container([
                         accept='.wav,.mp3'
                     ),
 
-                    # Audio Result
                     html.Div(id='audio-result', className="mt-3")
                 ])
             ], className="shadow-sm")
-        ], md=6)
+        ], md=4),
+
+        # SAR TIFF Analysis frame
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader(html.H3("📡 SAR Signal Analysis")),
+                dbc.CardBody([
+
+                    dcc.Upload(
+                        id='upload-vv',
+                        children=html.Div(['📄 Select VV TIFF']),
+                        style={
+                            'width': '100%',
+                            'height': '60px',
+                            'lineHeight': '60px',
+                            'borderWidth': '1px',
+                            'borderStyle': 'dashed',
+                            'borderRadius': '5px',
+                            'textAlign': 'center',
+                            'margin': '5px 0',
+                            'backgroundColor': '#f8f9fa',
+                            'fontSize': '14px'
+                        },
+                        accept='.tif,.tiff'
+                    ),
+                    html.Div(id='vv-status', className="small text-muted"),
+
+                    dcc.Upload(
+                        id='upload-vh',
+                        children=html.Div(['📄 Select VH TIFF (Optional)']),
+                        style={
+                            'width': '100%',
+                            'height': '60px',
+                            'lineHeight': '60px',
+                            'borderWidth': '1px',
+                            'borderStyle': 'dashed',
+                            'borderRadius': '5px',
+                            'textAlign': 'center',
+                            'margin': '5px 0',
+                            'backgroundColor': '#f8f9fa',
+                            'fontSize': '14px'
+                        },
+                        accept='.tif,.tiff'
+                    ),
+                    html.Div(id='vh-status', className="small text-muted"),
+
+                    dbc.Button("Analyze", id="analyze-tiff-btn", color="primary",
+                               className="mt-2 w-100", size="sm", disabled=True),
+                ])
+            ], className="shadow-sm")
+        ], md=4)
 
     ], className="mb-4"),
+
+    # Results
+    dbc.Row([
+        dbc.Col([html.Div(id='tiff-result')])
+    ]),
 
     # Footer
     dbc.Row([
         dbc.Col([
             html.Hr(),
-            html.P("Powered by PyTorch + Dash",
+            html.P("Powered by PyTorch + Dash + SarPy",
                    className="text-center text-muted")
         ])
-    ])
+    ]),
+
+    # Hidden storage
+    dcc.Store(id='vv-store'),
+    dcc.Store(id='vh-store'),
 
 ], fluid=True)
 
-# Callback: SAR classification
+
+# --------------------------------------------------
+# Callbacks
+# --------------------------------------------------
 @app.callback(
     Output('sar-result', 'children'),
     Input('upload-sar', 'contents'),
@@ -117,51 +185,16 @@ app.layout = dbc.Container([
 def classify_sar(contents, filename):
     if contents is None:
         return html.Div("No file uploaded", className="text-muted")
-
     try:
-        # Decode uploaded .npy file
-        content_type, content_string = contents.split(',')
+        _, content_string = contents.split(',')
         decoded = base64.b64decode(content_string)
         sar_data = np.load(io.BytesIO(decoded))
-
-        # Validate channels (allow any height/width)
-        if sar_data.ndim != 3 or sar_data.shape[0] != 4:
-            return dbc.Alert(
-            f"❌ Invalid shape: {sar_data.shape}. Expected (4, H, W)",
-            color="danger"
-            )
-
-        # Validate dtype
-        if sar_data.dtype != np.float32:
-            sar_data = sar_data.astype(np.float32)
-
-        # PREDICT
         result = predict_damage(sar_data)
-
-        # Display result
-        if result == "Damage":
-            return dbc.Alert([
-                html.H4("🚨 DAMAGE DETECTED", className="alert-heading"),
-                html.Hr(),
-                html.P(f"File: {filename}"),
-                html.P("Earthquake damage identified in SAR imagery", className="mb-0")
-            ], color="danger")
-        else:
-            return dbc.Alert([
-                html.H4("✅ No Damage", className="alert-heading"),
-                html.Hr(),
-                html.P(f"File: {filename}"),
-                html.P("No significant damage detected", className="mb-0")
-            ], color="success")
-
+        return dbc.Alert(f"Result: {result}", color="info")
     except Exception as e:
-        return dbc.Alert(
-            f"❌ Error processing file: {str(e)}",
-            color="danger"
-        )
+        return dbc.Alert(f"❌ Error: {e}", color="danger")
 
 
-# Callback: audio classification
 @app.callback(
     Output('audio-result', 'children'),
     Input('upload-audio', 'contents'),
@@ -170,54 +203,87 @@ def classify_sar(contents, filename):
 def classify_audio_file(contents, filename):
     if contents is None:
         return html.Div("No file uploaded", className="text-muted")
-
     try:
-        # Decode uploaded audio file
-        content_type, content_string = contents.split(',')
+        _, content_string = contents.split(',')
         decoded = base64.b64decode(content_string)
-
-        # Save temporarily (classify_audio needs file path)
-        temp_path = f"temp_audio_{filename}"
+        temp_path = f"temp_{filename}"
         with open(temp_path, 'wb') as f:
             f.write(decoded)
-
-        # CLASSIFY using your function
-        result = classify_audio(temp_path)  # Returns: "drone", "bird", or "other"
-
-        # Clean up temp file
-        import os
+        result = classify_audio(temp_path)
         os.remove(temp_path)
-
-        # Display result
-        if result.lower() == "drone":
-            return dbc.Alert([
-                html.H4("🚁 DRONE DETECTED", className="alert-heading"),
-                html.Hr(),
-                html.P(f"File: {filename}"),
-                html.P("Drone sound identified in audio", className="mb-0")
-            ], color="warning")
-
-        elif result.lower() == "bird":
-            return dbc.Alert([
-                html.H4("🐦 BIRD DETECTED", className="alert-heading"),
-                html.Hr(),
-                html.P(f"File: {filename}"),
-                html.P("Bird sound identified in audio", className="mb-0")
-            ], color="info")
-
-        else:  # "other"
-            return dbc.Alert([
-                html.H4("🔊 OTHER SOUND", className="alert-heading"),
-                html.Hr(),
-                html.P(f"File: {filename}"),
-                html.P("Sound classified as 'other'", className="mb-0")
-            ], color="secondary")
-
+        return dbc.Alert(f"Result: {result}", color="success")
     except Exception as e:
-        return dbc.Alert(
-            f"❌ Error processing audio: {str(e)}",
-            color="danger"
-        )
+        return dbc.Alert(f"❌ Error: {e}", color="danger")
+
+
+@app.callback(
+    [Output('vv-status', 'children'),
+     Output('vv-store', 'data'),
+     Output('analyze-tiff-btn', 'disabled')],
+    Input('upload-vv', 'contents'),
+    State('upload-vv', 'filename')
+)
+def save_vv(contents, filename):
+    if contents is None:
+        return "", None, True
+    if ',' in contents:
+        _, content_string = contents.split(',')
+    else:
+        content_string = contents
+    decoded = base64.b64decode(content_string)
+    os.makedirs("temp_tiff", exist_ok=True)
+    path = os.path.join("temp_tiff", filename)
+    with open(path, 'wb') as f:
+        f.write(decoded)
+    return f"✓ {filename}", path, False
+
+
+@app.callback(
+    [Output('vh-status', 'children'),
+     Output('vh-store', 'data')],
+    Input('upload-vh', 'contents'),
+    State('upload-vh', 'filename')
+)
+def save_vh(contents, filename):
+    if contents is None:
+        return "", None
+    if ',' in contents:
+        _, content_string = contents.split(',')
+    else:
+        content_string = contents
+    decoded = base64.b64decode(content_string)
+    os.makedirs("temp_tiff", exist_ok=True)
+    path = os.path.join("temp_tiff", filename)
+    with open(path, 'wb') as f:
+        f.write(decoded)
+    return f"✓ {filename}", path
+
+
+@app.callback(
+    Output('tiff-result', 'children'),
+    Input('analyze-tiff-btn', 'n_clicks'),
+    [State('vv-store', 'data'),
+     State('vh-store', 'data')],
+    prevent_initial_call=True
+)
+def analyze_tiff(n_clicks, vv_path, vh_path):
+    try:
+        results = analyze_sar_file(vv_path, vh_path)
+        return html.Div([
+            dbc.Card([
+                dbc.CardHeader("📊 SAR Analysis Results"),
+                dbc.CardBody([
+                    html.H6("Statistics:"),
+                    html.Ul([html.Li(f"{k}: {v}") for k, v in results['statistics'].items()]),
+                    html.Hr(),
+                    html.Img(src=f"data:image/png;base64,{results['image1']}", style={'width': '100%'}),
+                    html.Br(),
+                    html.Img(src=f"data:image/png;base64,{results['image2']}", style={'width': '100%'})
+                ])
+            ])
+        ])
+    except Exception as e:
+        return dbc.Alert(f"❌ Error analyzing SAR: {e}", color="danger")
 
 
 if __name__ == '__main__':
