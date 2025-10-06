@@ -13,9 +13,6 @@ from models.audio_classifier import classify_audio
 from models.sar_analyzer import analyze_sar_file   # <-- Save your code into sarpy_analyzer.py
 
 
-# --------------------------------------------------
-# Dash App Setup
-# --------------------------------------------------
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
 app.layout = dbc.Container([
@@ -174,9 +171,7 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 
-# --------------------------------------------------
-# Callbacks
-# --------------------------------------------------
+
 @app.callback(
     Output('sar-result', 'children'),
     Input('upload-sar', 'contents'),
